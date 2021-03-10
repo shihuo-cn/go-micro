@@ -174,7 +174,7 @@ func (c *cache) get(service string) ([]*registry.Service, error) {
 
 		// only kick it off if not running
 		if !c.running {
-			go c.run()
+			go c.run(service)
 		}
 
 		c.Unlock()
@@ -304,7 +304,7 @@ func (c *cache) update(res *registry.Result) {
 
 // run starts the cache watcher loop
 // it creates a new watcher if there's a problem
-func (c *cache) run() {
+func (c *cache) run(service string) {
 	c.Lock()
 	c.running = true
 	c.Unlock()
@@ -330,7 +330,10 @@ func (c *cache) run() {
 		time.Sleep(time.Duration(j) * time.Millisecond)
 
 		// create new watcher
-		w, err := c.Registry.Watch()
+		watchOption := func(wo *registry.WatchOptions) {
+			wo.Service = service
+		}
+		w, err := c.Registry.Watch(watchOption)
 		if err != nil {
 			if c.quit() {
 				return
