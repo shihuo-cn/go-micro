@@ -2,6 +2,8 @@
 package cache
 
 import (
+	"encoding/json"
+	"fmt"
 	"math"
 	"math/rand"
 	"sync"
@@ -415,6 +417,8 @@ func (c *cache) watch(w registry.Watcher) error {
 
 	for {
 		res, err := w.Next()
+		b, _ := json.Marshal(res)
+		fmt.Println(b)
 		if err != nil {
 			close(stop)
 			return err
