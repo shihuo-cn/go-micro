@@ -9,11 +9,11 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/sync/singleflight"
-
 	"github.com/micro/go-micro/v2/logger"
 	"github.com/micro/go-micro/v2/registry"
 	util "github.com/micro/go-micro/v2/util/registry"
+
+	"golang.org/x/sync/singleflight"
 )
 
 // Cache is the registry cache interface
@@ -183,9 +183,7 @@ func (c *cache) get(service string) ([]*registry.Service, error) {
 		c.watched[service] = true
 
 		// only kick it off if not running
-		if !c.running {
-			go c.run(service)
-		}
+		go c.run(service)
 
 		c.Unlock()
 	}
@@ -327,72 +325,74 @@ func (c *cache) run(service string) {
 		c.Unlock()
 	}()
 
-	var a, b int
+	go func() {
+		var a, b int
 
-	for {
-		// exit early if already dead
-		if c.quit() {
-			return
-		}
-
-		// jitter before starting
-		j := rand.Int63n(100)
-		time.Sleep(time.Duration(j) * time.Millisecond)
-
-		// create new watcher
-		watchOption := func(wo *registry.WatchOptions) {
-			wo.Service = service
-		}
-		w, err := c.Registry.Watch(watchOption)
-		if err != nil {
+		for {
+			// exit early if already dead
 			if c.quit() {
 				return
 			}
 
-			d := backoff(a)
-			c.setStatus(err)
+			// jitter before starting
+			j := rand.Int63n(100)
+			time.Sleep(time.Duration(j) * time.Millisecond)
 
-			if a > 3 {
-				if logger.V(logger.DebugLevel, logger.DefaultLogger) {
-					logger.Debug("rcache: ", err, " backing off ", d)
+			// create new watcher
+			watchOption := func(wo *registry.WatchOptions) {
+				wo.Service = service
+			}
+			w, err := c.Registry.Watch(watchOption)
+			if err != nil {
+				if c.quit() {
+					return
 				}
-				a = 0
-			}
 
-			time.Sleep(d)
-			a++
+				d := backoff(a)
+				c.setStatus(err)
 
-			continue
-		}
-
-		// reset a
-		a = 0
-
-		// watch for events
-		if err := c.watch(w); err != nil {
-			if c.quit() {
-				return
-			}
-
-			d := backoff(b)
-			c.setStatus(err)
-
-			if b > 3 {
-				if logger.V(logger.DebugLevel, logger.DefaultLogger) {
-					logger.Debug("rcache: ", err, " backing off ", d)
+				if a > 3 {
+					if logger.V(logger.DebugLevel, logger.DefaultLogger) {
+						logger.Debug("rcache: ", err, " backing off ", d)
+					}
+					a = 0
 				}
-				b = 0
+
+				time.Sleep(d)
+				a++
+
+				continue
 			}
 
-			time.Sleep(d)
-			b++
+			// reset a
+			a = 0
 
-			continue
+			// watch for events
+			if err := c.watch(w); err != nil {
+				if c.quit() {
+					return
+				}
+
+				d := backoff(b)
+				c.setStatus(err)
+
+				if b > 3 {
+					if logger.V(logger.DebugLevel, logger.DefaultLogger) {
+						logger.Debug("rcache: ", err, " backing off ", d)
+					}
+					b = 0
+				}
+
+				time.Sleep(d)
+				b++
+
+				continue
+			}
+
+			// reset b
+			b = 0
 		}
-
-		// reset b
-		b = 0
-	}
+	}()
 }
 
 // watch loops the next event and calls update
