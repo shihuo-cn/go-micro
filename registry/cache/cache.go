@@ -10,6 +10,8 @@ import (
 	"github.com/micro/go-micro/v2/logger"
 	"github.com/micro/go-micro/v2/registry"
 	util "github.com/micro/go-micro/v2/util/registry"
+
+	"golang.org/x/sync/singleflight"
 )
 
 // Cache is the registry cache interface
@@ -46,6 +48,8 @@ type cache struct {
 	// used to hold onto the cache
 	// in failure state
 	status error
+	// used to prevent cache breakdown
+	sg singleflight.Group
 }
 
 var (
@@ -132,7 +136,11 @@ func (c *cache) get(service string) ([]*registry.Service, error) {
 	// get does the actual request for a service and cache it
 	get := func(service string, cached []*registry.Service) ([]*registry.Service, error) {
 		// ask the registry
-		services, err := c.Registry.GetService(service)
+		val, err, _ := c.sg.Do(service, func() (interface{}, error) {
+			return c.Registry.GetService(service)
+		})
+		services, _ := val.([]*registry.Service)
+
 		if err != nil {
 			// check the cache
 			if len(cached) > 0 {
@@ -173,9 +181,7 @@ func (c *cache) get(service string) ([]*registry.Service, error) {
 		c.watched[service] = true
 
 		// only kick it off if not running
-		if !c.running {
-			go c.run()
-		}
+		go c.run(service)
 
 		c.Unlock()
 	}
@@ -304,16 +310,13 @@ func (c *cache) update(res *registry.Result) {
 
 // run starts the cache watcher loop
 // it creates a new watcher if there's a problem
-func (c *cache) run() {
-	c.Lock()
-	c.running = true
-	c.Unlock()
-
+func (c *cache) run(service string) {
 	// reset watcher on exit
 	defer func() {
 		c.Lock()
-		c.watched = make(map[string]bool)
-		c.running = false
+		if _, ok := c.watched[service]; ok {
+			delete(c.watched, service)
+		}
 		c.Unlock()
 	}()
 
@@ -330,7 +333,10 @@ func (c *cache) run() {
 		time.Sleep(time.Duration(j) * time.Millisecond)
 
 		// create new watcher
-		w, err := c.Registry.Watch()
+		watchOption := func(wo *registry.WatchOptions) {
+			wo.Service = service
+		}
+		w, err := c.Registry.Watch(watchOption)
 		if err != nil {
 			if c.quit() {
 				return
